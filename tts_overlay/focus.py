@@ -61,6 +61,24 @@ def _hyprland_focus() -> None:
         log.debug("hyprctl focuswindow failed: %s", exc)
 
 
+def make_dialog(window) -> None:
+    """Ask the compositor to treat *window* as a dialog. Never raises.
+
+    Wayland compositors tile ordinary windows and ignore the geometry the app
+    asked for, which clips a fixed-layout UI (a 580x500 window tiled into a
+    664x352 slot loses the bottom of its layout). Windows tagged
+    ``_NET_WM_WINDOW_TYPE_DIALOG`` are floated at their requested size by
+    Hyprland and most other compositors. On Windows this is a no-op: there is
+    no such property.
+    """
+    if not _IS_LINUX:
+        return
+    try:
+        window.attributes("-type", "dialog")
+    except Exception as exc:  # noqa: BLE001
+        log.debug("could not mark window as a dialog: %s", exc)
+
+
 def raise_window(root) -> None:
     """Make *root* visible and focused. Never raises."""
     if _IS_WIN:

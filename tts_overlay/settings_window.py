@@ -20,7 +20,7 @@ from tkinter import font as tkfont
 from tkinter import ttk
 from queue import Empty, Queue
 
-from . import config, logutil, micmute, recorder, secrets, settings, speech, tts
+from . import config, focus, logutil, micmute, recorder, secrets, settings, speech, tts
 from . import shutdown as sd
 from . import skin_ptt as _skin_ptt_mod
 from .tkutil import safe as _safe, device_label as _device_label
@@ -83,6 +83,9 @@ class SettingsWindow:
         self.root.geometry("580x500")
         self.root.minsize(500, 420)
         self.root.configure(bg=_BG)
+        # Linux/Wayland: tiling compositors ignore the geometry above, so ask
+        # to be treated as a dialog — that is what keeps the layout intact.
+        focus.make_dialog(self.root)
 
         # Create the Configuration Window as a child of MainWindow.
         # It stays hidden initially and transitions in when the gear icon is clicked.
@@ -92,6 +95,7 @@ class SettingsWindow:
         self.config_root.minsize(500, 560)
         self.config_root.configure(bg=_BG)
         self.config_root.withdraw()  # Start hidden
+        focus.make_dialog(self.config_root)
 
         # Intercept the OS close/delete signals so:
         # 1. Closing main window triggers application shutdown.

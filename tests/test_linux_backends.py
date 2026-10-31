@@ -191,6 +191,39 @@ def test_win32utils_is_inert_off_windows():
     win32utils.force_set_foreground(1234)
 
 
+class _FakeWindow:
+    """Records wm attribute calls the way a Tk widget would."""
+
+    def __init__(self, blow_up=False):
+        self.attrs: dict[str, object] = {}
+        self._blow_up = blow_up
+
+    def attributes(self, key, value):
+        if self._blow_up:
+            raise RuntimeError("bad option")
+        self.attrs[key] = value
+
+
+def test_make_dialog_marks_the_window_as_a_dialog(monkeypatch):
+    """Tiling compositors ignore requested geometry; the dialog type keeps it."""
+    monkeypatch.setattr(focus, "_IS_LINUX", True)
+    window = _FakeWindow()
+    focus.make_dialog(window)
+    assert window.attrs == {"-type": "dialog"}
+
+
+def test_make_dialog_is_a_noop_off_linux(monkeypatch):
+    monkeypatch.setattr(focus, "_IS_LINUX", False)
+    window = _FakeWindow()
+    focus.make_dialog(window)      # must not touch the window
+    assert window.attrs == {}
+
+
+def test_make_dialog_swallows_window_errors(monkeypatch):
+    monkeypatch.setattr(focus, "_IS_LINUX", True)
+    focus.make_dialog(_FakeWindow(blow_up=True))   # must not raise
+
+
 # ---------------------------------------------------------------------------
 # hotkey.py (pidfile side of the Linux trigger)
 # ---------------------------------------------------------------------------

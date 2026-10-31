@@ -254,3 +254,57 @@ def test_play_stream_closes_stream_on_completion(fake_audio):
     chunk = _make_pcm_chunk(512)
     audioplayer.play_stream(iter([chunk]), device_index=0, pcm_rate=24000)
     assert sd.last_output_stream.closed
+
+
+def test_play_bytes_upmixes_mono_container_audio(fake_audio, monkeypatch):
+    """Container-decoded mono must reach both channels of a stereo device."""
+    sd, sf = fake_audio
+    monkeypatch.setattr(
+        sf, "read",
+        lambda buf, dtype="float32": (np.zeros(10, dtype="float32"), 24000),
+    )
+    audioplayer.play_bytes(b"fakeaudio", device_index=0)
+    data, samplerate, _device = sd.played[-1]
+    assert samplerate == 24000
+    assert data.shape == (10, 2)
+
+
+# ------------------------------------------------- fixed-rate devices
+
+
+def test_resample_doubles_and_halves():
+    mono = np.sin(np.linspace(0, 20, 2400)).astype("float32")
+    up = audioplayer.resample(mono, 24000, 48000)
+    assert up.shape == (4800,)
+    down = audioplayer.resample(up, 48000, 12000)
+    assert down.shape == (1200,)
+
+
+def test_resample_keeps_channels_and_noop_cases():
+    stereo = np.zeros((240, 2), dtype="float32")
+    assert audioplayer.resample(stereo, 24000, 48000).shape == (480, 2)
+    assert audioplayer.resample(stereo, 24000, 24000) is stereo
+    assert audioplayer.resample(stereo, 0, 48000) is stereo
+    assert audioplayer.resample(None, 24000, 48000) is None
+
+
+def test_play_bytes_adapts_to_a_fixed_rate_device(fake_audio):
+    """A 48 kHz-only endpoint still gets the 24 kHz PCM, just resampled."""
+    sd, _ = fake_audio
+    sd._devices[1].update({"default_samplerate": 48000})
+    audioplayer.play_bytes(_make_pcm_chunk(2400), device_index=1, pcm_rate=24000)
+    data, samplerate, device = sd.played[-1]
+    assert (samplerate, device) == (48000, 1)
+    assert data.shape == (4800, 2)
+
+
+def test_play_stream_buffers_on_a_fixed_rate_device(fake_audio):
+    """Streaming to a fixed-rate device degrades to buffered playback."""
+    sd, _ = fake_audio
+    sd._devices[1].update({"default_samplerate": 48000})
+    audioplayer.play_stream(iter([_make_pcm_chunk(2400)]), device_index=1,
+                            pcm_rate=24000)
+    assert sd.last_output_stream is None          # no stream was opened
+    data, samplerate, device = sd.played[-1]      # played through play_bytes
+    assert (samplerate, device) == (48000, 1)
+    assert data.shape == (4800, 2)

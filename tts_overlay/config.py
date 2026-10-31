@@ -3,6 +3,8 @@
 Edit the values here to change behaviour. Everything else is implementation.
 """
 
+import sys
+
 # Global hotkey that toggles the overlay.
 HOTKEY = "ctrl+alt+t"
 
@@ -13,9 +15,11 @@ HOTKEY = "ctrl+alt+t"
 TTS_ENGINE = "elevenlabs"
 
 # Virtual cable detection — audio device names are searched for this substring.
-# Common values: "cable" (VB-Cable), "virtual" (Virtual Audio Cable),
-#                "voicemeeter" (Voicemeeter).  Case-insensitive.
-CABLE_DEVICE_KEYWORD = "cable"
+# Case-insensitive. On Windows the cable is a driver you install ("cable" =
+# VB-Cable, "virtual" = Virtual Audio Cable, "voicemeeter" = Voicemeeter). On
+# Linux tts_overlay.cable creates a PipeWire null sink whose *description* is
+# "SpeechSkin", and PortAudio shows that description, not the node name.
+CABLE_DEVICE_KEYWORD = "cable" if sys.platform == "win32" else "speechskin"
 
 # Index of the audio device to route TTS into (the virtual cable / "input").
 # None = auto-detect by CABLE_DEVICE_KEYWORD at startup.

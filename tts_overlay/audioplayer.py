@@ -75,6 +75,48 @@ def _device_max_output_channels(sd, device_index: int | None) -> int | None:
         return None
 
 
+def _device_rate(sd, device_index: int | None) -> int | None:
+    """Return the sample rate *device_index* accepts, or None when unknown.
+
+    Some endpoints are fixed-rate: PipeWire nodes showing up through the JACK
+    host API, and several virtual-cable drivers, reject any stream whose rate
+    differs from the node's own (PortAudio: ``Invalid sample rate``). Knowing
+    the device's rate lets us adapt instead of failing.
+    """
+    try:
+        info = sd.query_devices(device_index if device_index is not None
+                                else sd.default.device[1])
+        return int(info.get("default_samplerate") or 0) or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def resample(data, src_rate: int, dst_rate: int):
+    """Linearly resample *data* from *src_rate* to *dst_rate*.
+
+    Works on a mono 1-D array or a ``(frames, channels)`` array and preserves
+    the shape. Linear interpolation is plenty for speech and keeps this
+    dependency-free (numpy only). Returns *data* unchanged when no work is
+    needed.
+    """
+    if (data is None or not src_rate or not dst_rate
+            or int(src_rate) == int(dst_rate) or len(data) == 0):
+        return data
+    import numpy as np
+
+    n_src = len(data)
+    n_dst = max(1, int(round(n_src * float(dst_rate) / float(src_rate))))
+    x_src = np.arange(n_src, dtype="float64")
+    x_dst = np.linspace(0.0, float(n_src - 1), n_dst, dtype="float64")
+
+    mono = getattr(data, "ndim", 1) == 1
+    arr = np.asarray(data, dtype="float32").reshape(n_src, -1)
+    out = np.empty((n_dst, arr.shape[1]), dtype="float32")
+    for ch in range(arr.shape[1]):
+        out[:, ch] = np.interp(x_dst, x_src, arr[:, ch].astype("float64"))
+    return out[:, 0] if mono else out
+
+
 def play_bytes(audio: bytes, device_index: int | None | list[int | None],
                should_stop=None, pcm_rate: int | None = None) -> None:
     """Decode *audio* and play it on *device_index* (can be a single device or a list).
@@ -122,23 +164,37 @@ def play_bytes(audio: bytes, device_index: int | None | list[int | None],
             import numpy as np
             ints = np.frombuffer(audio, dtype="<i2")
             d_arr = ints.astype("float32") / 32768.0
-            if d_arr.ndim == 1:
-                max_ch = _device_max_output_channels(sd, dev)
-                if max_ch is None or max_ch >= 2:
-                    d_arr = np.column_stack([d_arr, d_arr])     # duplicate to stereo
-            return d_arr
-        return decoded_data
+        else:
+            d_arr = decoded_data
+        if d_arr is None:
+            return None
+        # A mono buffer played on a stereo device reaches only the left channel,
+        # so duplicate it — for container-decoded audio as well as raw PCM.
+        if getattr(d_arr, "ndim", 1) == 1:
+            import numpy as np
+            max_ch = _device_max_output_channels(sd, dev)
+            if max_ch is None or max_ch >= 2:
+                d_arr = np.column_stack([d_arr, d_arr])     # duplicate to stereo
+        return d_arr
+
+    # Fixed-rate endpoints (JACK nodes, some virtual cables) only accept their
+    # own rate, so adapt each device's copy instead of letting playback fail.
+    def _adapt_for_device(dev, data):
+        out_rate = _device_rate(sd, dev)
+        if data is None or not samplerate or not out_rate or out_rate == samplerate:
+            return data, samplerate or 0
+        return resample(data, samplerate, out_rate), out_rate
 
     # Play on all devices concurrently
     threads = []
-    def _play_worker(dev, dev_data):
+    def _play_worker(dev, dev_data, dev_rate):
         try:
-            sd.play(dev_data, samplerate, device=dev)
+            sd.play(dev_data, dev_rate, device=dev)
             
             # Sleep for the exact duration of the audio to poll safely without blocking.
             # dev_data is a numpy array; shape[0] is the number of frames.
-            if dev_data is not None and samplerate:
-                duration = len(dev_data) / samplerate
+            if dev_data is not None and dev_rate:
+                duration = len(dev_data) / dev_rate
                 import time
                 start_time = time.time()
                 while time.time() - start_time < duration:
@@ -150,8 +206,9 @@ def play_bytes(audio: bytes, device_index: int | None | list[int | None],
             log.error("Audio playback error on device %s: %s", dev, exc)
 
     for dev in unique_devices:
-        dev_data = _get_data_for_device(dev)
-        t = threading.Thread(target=_play_worker, args=(dev, dev_data), daemon=True)
+        dev_data, dev_rate = _adapt_for_device(dev, _get_data_for_device(dev))
+        t = threading.Thread(target=_play_worker, args=(dev, dev_data, dev_rate),
+                             daemon=True)
         t.start()
         threads.append(t)
 
@@ -210,7 +267,29 @@ def play_stream(
     for dev in unique_devices:
         max_ch = _device_max_output_channels(sd, dev)
         n_channels = 1 if (max_ch is not None and max_ch < 2) else 2
-        streams_info.append({"device": dev, "channels": n_channels})
+        streams_info.append({
+            "device": dev, "channels": n_channels, "rate": _device_rate(sd, dev),
+        })
+
+    # A fixed-rate endpoint (JACK node, some virtual cables) cannot accept the
+    # engine's PCM rate at all. Buffering the response and letting play_bytes()
+    # adapt it keeps the audio correct at the cost of some latency.
+    if any((info["rate"] or pcm_rate) != pcm_rate for info in streams_info):
+        log.debug(
+            "play_stream: fixed-rate output device(s) %s cannot stream %d Hz; "
+            "buffering instead", [i["device"] for i in streams_info
+                                  if (i["rate"] or pcm_rate) != pcm_rate], pcm_rate,
+        )
+        buffered = bytearray()
+        for chunk in chunks:
+            if should_stop is not None and should_stop():
+                return
+            if chunk:
+                buffered.extend(chunk)
+        if buffered:
+            play_bytes(bytes(buffered), device_index, should_stop=should_stop,
+                       pcm_rate=pcm_rate)
+        return
 
     # Shared ring-buffer and read cursors for each stream
     _buf_lock = threading.Lock()

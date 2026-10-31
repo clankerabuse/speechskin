@@ -55,3 +55,81 @@ Verify your installation with `pytest`:
 ```bash
 python -m pytest
 ```
+
+---
+
+## Linux (PipeWire / Wayland)
+
+SpeechSkin runs natively on Linux: no third-party driver is needed, because the
+virtual cable is a PipeWire null sink the app creates at startup.
+
+System packages (Arch):
+```bash
+sudo pacman -S tk portaudio pipewire pipewire-pulse
+```
+`tk` is what Python's `tkinter` links against; PortAudio backs `sounddevice`.
+
+Run it:
+```bash
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt
+cp secrets.env.example secrets.env   # add ELEVENLABS_API_KEY
+.venv/bin/python speechskin.py       # or ./start.sh
+```
+
+The first start creates the sink `SpeechSkin` (check with
+`pactl list short sinks`). In your voice-chat app pick **Monitor of SpeechSkin**
+as the microphone — TTS goes to the sink, the app reads its monitor. The sink
+is a runtime module, so start the app again after a PipeWire restart or make it
+permanent with `~/.config/pipewire/pipewire.conf.d/10-speechskin.conf`:
+
+```conf
+context.objects = [
+  { factory = adapter
+    args = {
+      factory.name     = support.null-audio-sink
+      node.name        = speechskin
+      node.description = "SpeechSkin"
+      media.class      = "Audio/Sink"
+      object.linger    = true
+      audio.position   = [ FL FR ]
+    }
+  }
+]
+```
+
+### Global hotkey
+
+On Linux the app cannot grab global keys itself (the `keyboard` library needs
+root and reads `/dev/input`), so the binding lives in the compositor and calls
+`scripts/speechskin-toggle`, which sends `SIGUSR1` to the PID published in
+`$XDG_RUNTIME_DIR/speechskin.pid`:
+
+```lua
+-- ~/.config/hypr/bindings.lua (Hyprland / Omarchy)
+o.bind("CTRL ALT + T", "SpeechSkin overlay",
+       "/path/to/speechskin/scripts/speechskin-toggle")
+```
+
+Tick **Overlay (Ctrl+Alt+T)** in the settings window first — `ALLOW_OVERLAY`
+defaults to off and the signal is ignored while it is off. `SIGTERM` shuts the
+app down cleanly and removes the pidfile.
+
+### Window placement
+
+The settings window is a normal window, so a tiling compositor will tile it.
+To float it:
+
+```conf
+windowrulev2 = float, class:^(Toplevel)$, title:^(SpeechSkin)$
+```
+
+### Notes
+
+* Fixed-rate output nodes (PipeWire nodes exposed through the JACK host API, and
+  most virtual cables) only accept their own sample rate. Playback resamples to
+  the device automatically, and streaming playback degrades to buffered playback
+  on such devices rather than failing.
+* Not ported yet: Skin mode's push-to-talk hooks (`skin_ptt.py`,
+  `target_ptt.py`) use `pynput`, which only sees XWayland clients under Wayland.
+  Typing TTS, the overlay, the virtual cable and mic mute all work.

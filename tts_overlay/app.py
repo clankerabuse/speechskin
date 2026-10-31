@@ -12,7 +12,7 @@ import time
 
 import tkinter as tk
 
-from . import config, hotkey, logutil, settings, tts
+from . import cable, config, hotkey, logutil, settings, tts
 from . import shutdown as sd
 from .overlay import OverlayWindow
 from .settings_window import SettingsWindow
@@ -97,6 +97,11 @@ def main() -> None:
         return
 
     devices = tts.enumerate_audio_devices()
+
+    # Linux has no VB-Cable driver: make sure the PipeWire null sink exists,
+    # then re-enumerate so the new device shows up in the list below.
+    if cable.ensure():
+        devices = tts.enumerate_audio_devices()
 
     # Auto-detect the virtual cable if not already pinned by /audio input.
     if config.CABLE_DEVICE_INDEX is None:

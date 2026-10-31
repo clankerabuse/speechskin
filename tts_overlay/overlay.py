@@ -17,7 +17,7 @@ import time
 import tkinter as tk
 from tkinter import font as tkfont
 
-from . import commands, config, logutil, speech, tts, win32utils
+from . import commands, config, focus, logutil, speech, tts
 from . import shutdown as sd
 from .tkutil import safe as _safe
 
@@ -40,7 +40,7 @@ class OverlayWindow:
         self._status_reset_id: str | None = None
 
         self.root = tk.Tk()
-        self.root.title("SpeechSkin")
+        self.root.title(focus.WINDOW_TITLE)
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
         self.root.attributes("-alpha", config.OVERLAY_ALPHA)
@@ -225,17 +225,10 @@ class OverlayWindow:
         self.root.lift()
         self.root.update_idletasks()
 
-        try:
-            hwnd = int(self.root.wm_frame(), 16)
-        except (ValueError, tk.TclError):
-            hwnd = 0
-        if not hwnd:
-            hwnd = self.root.winfo_id()
+        # Platform focus coercion: Win32 foreground lock on Windows, the
+        # compositor on Wayland. Best-effort and never fatal.
+        focus.raise_window(self.root)
 
-        win32utils.nudge_alt_key()
-        win32utils.force_set_foreground(hwnd)
-
-        self.root.focus_force()
         self.entry.focus_set()
         self.entry.delete(0, tk.END)
         self._update_indicator()

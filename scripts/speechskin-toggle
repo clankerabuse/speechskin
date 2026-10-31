@@ -1,0 +1,28 @@
+#!/bin/sh
+# Toggle the SpeechSkin overlay from a compositor keybinding.
+#
+# On Linux the app cannot register global hotkeys itself (the `keyboard`
+# library needs root, and grabbing every key is not acceptable), so the binding
+# lives in the compositor and calls this script. The app publishes its PID to
+# $XDG_RUNTIME_DIR/speechskin.pid at startup; SIGUSR1 is the toggle.
+#
+# Hyprland (~/.config/hypr/bindings.lua), Omarchy style:
+#   o.bind("CTRL ALT + T", "SpeechSkin overlay",
+#          "/home/you/Projects/speechskin/scripts/speechskin-toggle")
+set -u
+
+PID_FILE="${XDG_RUNTIME_DIR:-/tmp}/speechskin.pid"
+
+if [ -r "$PID_FILE" ]; then
+    pid=$(cat "$PID_FILE" 2>/dev/null || true)
+    if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
+        kill -USR1 "$pid" && exit 0
+        echo "speechskin: could not signal pid $pid" >&2
+        exit 1
+    fi
+    echo "speechskin: stale pidfile $PID_FILE (pid ${pid:-?} is not running)" >&2
+    exit 1
+fi
+
+echo "speechskin: not running (no $PID_FILE)" >&2
+exit 1

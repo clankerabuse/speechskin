@@ -1,11 +1,15 @@
 # Runtime
-keyboard
 numpy
-pycaw
 sounddevice
 soundfile
 pynput
 
+# Windows-only: global hotkeys (the `keyboard` library needs root and
+# /dev/input on Linux) and system-level mic mute (pycaw is COM/Win32).
+# On Linux the hotkey is a compositor binding (see scripts/speechskin-toggle)
+# and mic mute goes through pactl, so neither package is installed there.
+keyboard; sys_platform == "win32"
+pycaw; sys_platform == "win32"
 
 # Dev / test (not required to run the app)
 pytest

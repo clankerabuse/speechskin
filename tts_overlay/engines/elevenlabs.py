@@ -107,14 +107,6 @@ class ElevenLabsEngine(TTSEngine):
                 conn = self._get_conn()
                 conn.request(method, f"/v1{path}", body=body, headers=hdrs)
                 resp = conn.getresponse()
-                if resp.status >= 400:
-                    resp_body = resp.read()
-                    raise urllib.error.HTTPError(
-                        f"{_API_ROOT}{path}", resp.status,
-                        resp_body.decode("utf-8", "replace"),
-                        dict(resp.getheaders()), io.BytesIO(resp_body),
-                    )
-                return resp
             except (ConnectionError, OSError, http.client.HTTPException) as exc:
                 log.debug("Persistent conn failed (attempt %d): %s", attempt + 1, exc)
                 # Recycle connection and retry once.
@@ -126,6 +118,20 @@ class ElevenLabsEngine(TTSEngine):
                 self._conn = None
                 if attempt == 1:
                     raise
+                continue
+
+            # An HTTP error is a completed exchange, not a broken connection.
+            # Retrying it would resend POSTs (synthesis, uploads) and hammer
+            # rate limits. urllib's HTTPError subclasses OSError, so this
+            # check must live *outside* the except clause above.
+            if resp.status >= 400:
+                resp_body = resp.read()
+                raise urllib.error.HTTPError(
+                    f"{_API_ROOT}{path}", resp.status,
+                    resp_body.decode("utf-8", "replace"),
+                    dict(resp.getheaders()), io.BytesIO(resp_body),
+                )
+            return resp
         raise RuntimeError("unreachable")
 
     def _request(self, method: str, path: str, body: dict | None = None,

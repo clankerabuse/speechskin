@@ -380,6 +380,81 @@ def test_startup_check_with_key_passes(monkeypatch):
     engine.startup_check()  # should not raise
 
 
+# ------------------------------------ persistent connection retry policy
+
+
+class _FakeResponse:
+    """Minimal ``http.client.HTTPResponse`` stand-in."""
+
+    def __init__(self, status=200, body=b"{}"):
+        self.status = status
+        self._body = body
+
+    def read(self, *args):
+        return self._body
+
+    def getheaders(self):
+        return [("Content-Type", "application/json")]
+
+    def close(self):
+        pass
+
+
+class _FakeConn:
+    """Minimal ``HTTPSConnection`` stand-in that records every request."""
+
+    def __init__(self, response=None, error=None):
+        self.requests = []
+        self._response = response
+        self._error = error
+        self.closed = False
+
+    def request(self, method, path, body=None, headers=None):
+        self.requests.append((method, path))
+        if self._error is not None:
+            raise self._error
+
+    def getresponse(self):
+        return self._response
+
+    def close(self):
+        self.closed = True
+
+
+def _conns(*conns):
+    """Return a ``_get_conn`` replacement yielding *conns* in order."""
+    pending = list(conns)
+    return lambda: pending.pop(0)
+
+
+def test_http_error_is_not_retried(el_engine, monkeypatch):
+    """A 4xx/5xx must surface immediately instead of being resent.
+
+    ``urllib.error.HTTPError`` subclasses ``OSError``, so it used to be caught
+    by the connection-error retry: every failed API call was issued twice.
+    """
+    conn = _FakeConn(_FakeResponse(429, b'{"detail":"rate limited"}'))
+    monkeypatch.setattr(el_engine, "_get_conn", lambda: conn)
+
+    with pytest.raises(urllib.error.HTTPError) as info:
+        el_engine._request("POST", "/text-to-speech/voice", body={"text": "hi"})
+
+    assert info.value.code == 429
+    assert info.value.read() == b'{"detail":"rate limited"}'
+    assert len(conn.requests) == 1
+
+
+def test_connection_error_is_still_retried(el_engine, monkeypatch):
+    """A genuine connection failure is still retried once on a fresh conn."""
+    dead = _FakeConn(error=ConnectionResetError("peer reset"))
+    live = _FakeConn(_FakeResponse(200, b'{"voices": []}'))
+    monkeypatch.setattr(el_engine, "_get_conn", _conns(dead, live))
+
+    assert el_engine._request("GET", "/voices") == b'{"voices": []}'
+    assert len(dead.requests) == 1
+    assert len(live.requests) == 1
+
+
 class _FakeFp:
     """Minimal file-like object for HTTPError.read()."""
 

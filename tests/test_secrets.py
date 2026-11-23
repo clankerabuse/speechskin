@@ -28,6 +28,14 @@ def test_reads_from_file(monkeypatch, tmp_path):
     assert secrets.get("MY_KEY") == "from_file"
 
 
+def test_set_writes_owner_only_file(monkeypatch, tmp_path):
+    path = tmp_path / "secrets.env"
+    monkeypatch.setattr(secrets, "SECRETS_PATH", path)
+    secrets.set("MY_KEY", "from_set")
+    assert secrets.get("MY_KEY") == "from_set"
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
 def test_default_when_missing(monkeypatch, tmp_path):
     monkeypatch.setattr(secrets, "SECRETS_PATH", tmp_path / "nope.env")
     monkeypatch.delenv("MISSING", raising=False)

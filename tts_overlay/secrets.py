@@ -79,5 +79,7 @@ def set(name: str, value: str) -> None:
             lines.append(f"{name}={value}")
 
         SECRETS_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        # secrets.env holds API keys: keep it owner-only whatever the umask was
+        os.chmod(SECRETS_PATH, 0o600)
     except Exception as exc:  # noqa: BLE001
         log.warning("Could not write secrets file %s: %s", SECRETS_PATH, exc)
